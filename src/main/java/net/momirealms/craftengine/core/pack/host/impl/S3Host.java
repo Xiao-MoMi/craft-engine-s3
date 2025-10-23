@@ -54,7 +54,7 @@ public class S3Host implements ResourcePackHost {
     private final HeadObjectRequest headObjectRequest;
     private final String bucket;
     private final String uploadPath;
-    private final boolean forceCalculateSHA256;
+    private final boolean disableCalculateSHA256;
     private final String cdnUrl;
     private final int maxRequests;
     private final int resetInterval;
@@ -72,7 +72,7 @@ public class S3Host implements ResourcePackHost {
             HeadObjectRequest headObjectRequest,
             String bucket,
             String uploadPath,
-            boolean forceCalculateSHA256,
+            boolean disableCalculateSHA256,
             String cdnUrl,
             int maxRequests,
             int resetInterval
@@ -83,7 +83,7 @@ public class S3Host implements ResourcePackHost {
         this.headObjectRequest = headObjectRequest;
         this.bucket = bucket;
         this.uploadPath = uploadPath;
-        this.forceCalculateSHA256 = forceCalculateSHA256;
+        this.disableCalculateSHA256 = disableCalculateSHA256;
         this.cdnUrl = cdnUrl;
         this.maxRequests = maxRequests;
         this.resetInterval = resetInterval;
@@ -140,8 +140,7 @@ public class S3Host implements ResourcePackHost {
                 .bucket(this.bucket)
                 .key(this.uploadPath)
                 .metadata(Map.of("sha1", HashUtils.calculateLocalFileSha1(resourcePackPath)));
-        // 4m cloudflare 这里一定必须要强行计算并提交 sha256 才能上传成功
-        if (this.forceCalculateSHA256) {
+        if (!this.disableCalculateSHA256) {
             build = build.checksumSHA256(calculateSHA256(resourcePackPath));
         }
         long uploadStart = System.currentTimeMillis();
@@ -201,7 +200,7 @@ public class S3Host implements ResourcePackHost {
             String accessKeyId = ResourceConfigUtils.requireNonEmptyStringOrThrow(useEnv ? System.getenv("CE_S3_ACCESS_KEY_ID") : arguments.get("access-key-id"), "warning.config.host.s3.missing_access_key");
             String accessKeySecret = ResourceConfigUtils.requireNonEmptyStringOrThrow(useEnv ? System.getenv("CE_S3_ACCESS_KEY_SECRET") : arguments.get("access-key-secret"), "warning.config.host.s3.missing_secret");
             String uploadPath = ResourceConfigUtils.requireNonEmptyStringOrThrow(arguments.getOrDefault("upload-path", "craftengine/resource_pack.zip"), "warning.config.host.s3.missing_upload_path");
-            boolean forceCalculateSHA256 = !ResourceConfigUtils.getAsBoolean(arguments.getOrDefault("disable-calculate-sha256", false), "disable-calculate-sha256");
+            boolean disableCalculateSHA256 = ResourceConfigUtils.getAsBoolean(arguments.getOrDefault("disable-calculate-sha256", false), "disable-calculate-sha256");
             Duration validity = Duration.ofSeconds(ResourceConfigUtils.getAsInt(arguments.getOrDefault("validity", 10), "validity"));
 
             Map<String, Object> cdn = MiscUtils.castToMap(arguments.get("cdn"), true);
@@ -264,7 +263,7 @@ public class S3Host implements ResourcePackHost {
                 resetInterval = ResourceConfigUtils.getAsInt(rateMap.getOrDefault("reset-interval", 20), "reset-interval") * 1000;
             }
 
-            return new S3Host(s3AsyncClient, preSigner, presignRequest, headObjectRequest, bucket, uploadPath, forceCalculateSHA256, cdnUrl, maxRequests, resetInterval);
+            return new S3Host(s3AsyncClient, preSigner, presignRequest, headObjectRequest, bucket, uploadPath, disableCalculateSHA256, cdnUrl, maxRequests, resetInterval);
         }
     }
 
