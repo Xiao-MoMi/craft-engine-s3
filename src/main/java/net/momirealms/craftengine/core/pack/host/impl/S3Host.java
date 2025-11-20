@@ -3,6 +3,7 @@ package net.momirealms.craftengine.core.pack.host.impl;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Scheduler;
+import com.google.common.util.concurrent.RateLimiter;
 import net.momirealms.craftengine.core.pack.host.ResourcePackDownloadData;
 import net.momirealms.craftengine.core.pack.host.ResourcePackHost;
 import net.momirealms.craftengine.core.pack.host.ResourcePackHostFactory;
@@ -45,7 +46,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 
-@SuppressWarnings("unused")
+@SuppressWarnings({"unused", "UnstableApiUsage"})
 public class S3Host implements ResourcePackHost {
     public static final Factory FACTORY = new Factory();
     private final S3AsyncClient s3AsyncClient;
@@ -56,13 +57,12 @@ public class S3Host implements ResourcePackHost {
     private final String uploadPath;
     private final boolean disableCalculateSHA256;
     private final String cdnUrl;
-    private final int maxRequests;
-    private final int resetInterval;
     private final boolean enableRateLimit;
-    private final Cache<UUID, UserAccessRecord> userAccessCache = Caffeine.newBuilder()
+    private final double qps;
+    private final Cache<UUID, RateLimiter> userRateLimiters = Caffeine.newBuilder()
             .maximumSize(256)
             .scheduler(Scheduler.systemScheduler())
-            .expireAfterWrite(10, TimeUnit.MINUTES)
+            .expireAfterAccess(10, TimeUnit.MINUTES)
             .build();
 
     public S3Host(
@@ -74,8 +74,7 @@ public class S3Host implements ResourcePackHost {
             String uploadPath,
             boolean disableCalculateSHA256,
             String cdnUrl,
-            int maxRequests,
-            int resetInterval
+            double qps
     ) {
         this.s3AsyncClient = s3AsyncClient;
         this.preSigner = preSigner;
@@ -85,9 +84,8 @@ public class S3Host implements ResourcePackHost {
         this.uploadPath = uploadPath;
         this.disableCalculateSHA256 = disableCalculateSHA256;
         this.cdnUrl = cdnUrl;
-        this.maxRequests = maxRequests;
-        this.resetInterval = resetInterval;
-        this.enableRateLimit = maxRequests > 0 && resetInterval > 0;
+        this.qps = qps;
+        this.enableRateLimit = qps > 0;
     }
 
     @Override
@@ -256,44 +254,30 @@ public class S3Host implements ResourcePackHost {
                     .build();
 
             Map<String, Object> rateMap = MiscUtils.castToMap(arguments.get("rate-map"), true);
-            int maxRequests = -1;
-            int resetInterval = -1;
+            double qps = -1;
             if (rateMap != null) {
-                maxRequests = ResourceConfigUtils.getAsInt(rateMap.getOrDefault("max-requests", 5), "max-requests");
-                resetInterval = ResourceConfigUtils.getAsInt(rateMap.getOrDefault("reset-interval", 20), "reset-interval") * 1000;
+                if (rateMap.containsKey("qps")) {
+                    qps = ResourceConfigUtils.getAsDouble(rateMap.get("qps"), "qps");
+                } else {
+                    int maxRequests = ResourceConfigUtils.getAsInt(rateMap.getOrDefault("max-requests", 5), "max-requests");
+                    int resetIntervalSeconds = ResourceConfigUtils.getAsInt(rateMap.getOrDefault("reset-interval", 20), "reset-interval");
+                    if (maxRequests > 0 && resetIntervalSeconds > 0) {
+                        qps = (double) maxRequests / resetIntervalSeconds;
+                    }
+                }
             }
 
-            return new S3Host(s3AsyncClient, preSigner, presignRequest, headObjectRequest, bucket, uploadPath, disableCalculateSHA256, cdnUrl, maxRequests, resetInterval);
+            return new S3Host(s3AsyncClient, preSigner, presignRequest, headObjectRequest, bucket, uploadPath, disableCalculateSHA256, cdnUrl, qps);
         }
     }
 
     private boolean checkRateLimit(UUID user) {
         if (!this.enableRateLimit) return false;
-        UserAccessRecord record = userAccessCache.getIfPresent(user);
-        long now = System.currentTimeMillis();
-
-        if (record == null) {
-            record = new UserAccessRecord(now, 1);
-            userAccessCache.put(user, record);
-            return false;
+        RateLimiter rateLimiter = this.userRateLimiters.get(user, k -> RateLimiter.create(this.qps));
+        if (rateLimiter == null) {
+            rateLimiter = RateLimiter.create(this.qps);
+            this.userRateLimiters.put(user, rateLimiter);
         }
-
-        if (now - record.lastAccessTime > this.resetInterval) {
-            record.lastAccessTime = now;
-            record.accessCount = 1;
-            return false;
-        }
-
-        return ++record.accessCount > this.maxRequests;
-    }
-
-    private static class UserAccessRecord {
-        long lastAccessTime;
-        int accessCount;
-
-        UserAccessRecord(long lastAccessTime, int accessCount) {
-            this.lastAccessTime = lastAccessTime;
-            this.accessCount = accessCount;
-        }
+        return !rateLimiter.tryAcquire();
     }
 }

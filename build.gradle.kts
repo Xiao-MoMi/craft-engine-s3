@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "net.momirealms"
-version = "0.8"
+version = "0.9"
 
 repositories {
     mavenCentral()
@@ -23,6 +23,8 @@ dependencies {
     compileOnly("software.amazon.awssdk:netty-nio-client:2.31.23")
     // Cache
     compileOnly("com.github.ben-manes.caffeine:caffeine:3.2.0")
+    // Guava
+    compileOnly("com.google.guava:guava:33.5.0-jre")
 }
 
 java {
