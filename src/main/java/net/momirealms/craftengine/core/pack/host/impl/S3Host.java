@@ -274,7 +274,7 @@ public class S3Host implements ResourcePackHost {
     private boolean checkRateLimit(UUID user) {
         if (!this.enableRateLimit) return false;
         RateLimiter rateLimiter = this.userRateLimiters.get(user, k -> RateLimiter.create(this.qps));
-        if (rateLimiter == null) {
+        if (rateLimiter == null) { // 怎么可能null?
             rateLimiter = RateLimiter.create(this.qps);
             this.userRateLimiters.put(user, rateLimiter);
         }
