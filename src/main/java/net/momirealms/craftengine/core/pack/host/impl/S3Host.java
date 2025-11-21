@@ -61,7 +61,6 @@ public class S3Host implements ResourcePackHost {
     private final boolean enableRateLimit;
     private final Bandwidth limit;
     private final Cache<UUID, Bucket> userRateLimiters = Caffeine.newBuilder()
-            .maximumSize(256)
             .scheduler(Scheduler.systemScheduler())
             .expireAfterAccess(10, TimeUnit.MINUTES)
             .build();
