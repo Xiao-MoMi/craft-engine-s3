@@ -23,8 +23,8 @@ dependencies {
     compileOnly("software.amazon.awssdk:netty-nio-client:2.31.23")
     // Cache
     compileOnly("com.github.ben-manes.caffeine:caffeine:3.2.0")
-    // Guava
-    compileOnly("com.google.guava:guava:33.5.0-jre")
+    // bucket4j
+    compileOnly("com.bucket4j:bucket4j_jdk17-core:8.15.0")
 }
 
 java {

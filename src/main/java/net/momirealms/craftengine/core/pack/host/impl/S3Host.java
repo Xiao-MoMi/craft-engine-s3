@@ -3,7 +3,8 @@ package net.momirealms.craftengine.core.pack.host.impl;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Scheduler;
-import com.google.common.util.concurrent.RateLimiter;
+import io.github.bucket4j.Bandwidth;
+import io.github.bucket4j.Bucket;
 import net.momirealms.craftengine.core.pack.host.ResourcePackDownloadData;
 import net.momirealms.craftengine.core.pack.host.ResourcePackHost;
 import net.momirealms.craftengine.core.pack.host.ResourcePackHostFactory;
@@ -46,7 +47,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 
-@SuppressWarnings({"unused", "UnstableApiUsage"})
+@SuppressWarnings("unused")
 public class S3Host implements ResourcePackHost {
     public static final Factory FACTORY = new Factory();
     private final S3AsyncClient s3AsyncClient;
@@ -58,8 +59,8 @@ public class S3Host implements ResourcePackHost {
     private final boolean disableCalculateSHA256;
     private final String cdnUrl;
     private final boolean enableRateLimit;
-    private final double qps;
-    private final Cache<UUID, RateLimiter> userRateLimiters = Caffeine.newBuilder()
+    private final Bandwidth limit;
+    private final Cache<UUID, Bucket> userRateLimiters = Caffeine.newBuilder()
             .maximumSize(256)
             .scheduler(Scheduler.systemScheduler())
             .expireAfterAccess(10, TimeUnit.MINUTES)
@@ -74,7 +75,7 @@ public class S3Host implements ResourcePackHost {
             String uploadPath,
             boolean disableCalculateSHA256,
             String cdnUrl,
-            double qps
+            Bandwidth limit
     ) {
         this.s3AsyncClient = s3AsyncClient;
         this.preSigner = preSigner;
@@ -84,8 +85,8 @@ public class S3Host implements ResourcePackHost {
         this.uploadPath = uploadPath;
         this.disableCalculateSHA256 = disableCalculateSHA256;
         this.cdnUrl = cdnUrl;
-        this.qps = qps;
-        this.enableRateLimit = qps > 0;
+        this.limit = limit;
+        this.enableRateLimit = limit != null;
     }
 
     @Override
@@ -253,31 +254,29 @@ public class S3Host implements ResourcePackHost {
                     .key(uploadPath)
                     .build();
 
-            Map<String, Object> rateMap = MiscUtils.castToMap(arguments.get("rate-map"), true);
-            double qps = -1;
+            Map<String, Object> rateMap = MiscUtils.castToMap(arguments.getOrDefault("rate-map", arguments.get("rate-limit")), true);
+            Bandwidth limit = null;
             if (rateMap != null) {
-                if (rateMap.containsKey("qps")) {
-                    qps = ResourceConfigUtils.getAsDouble(rateMap.get("qps"), "qps");
-                } else {
-                    int maxRequests = ResourceConfigUtils.getAsInt(rateMap.getOrDefault("max-requests", 5), "max-requests");
-                    int resetIntervalSeconds = ResourceConfigUtils.getAsInt(rateMap.getOrDefault("reset-interval", 20), "reset-interval");
-                    if (maxRequests > 0 && resetIntervalSeconds > 0) {
-                        qps = (double) maxRequests / resetIntervalSeconds;
-                    }
-                }
+                int maxRequests = Math.max(ResourceConfigUtils.getAsInt(rateMap.getOrDefault("max-requests", 5), "max-requests"), 1);
+                int resetInterval = Math.max(ResourceConfigUtils.getAsInt(rateMap.getOrDefault("reset-interval", 20), "reset-interval"), 1);
+                limit = Bandwidth.builder()
+                        .capacity(maxRequests)
+                        .refillGreedy(maxRequests, Duration.ofSeconds(resetInterval))
+                        .initialTokens(maxRequests / 2) // 修正首次可以直接突破限制请求 maxRequests * 2 次
+                        .build();
             }
 
-            return new S3Host(s3AsyncClient, preSigner, presignRequest, headObjectRequest, bucket, uploadPath, disableCalculateSHA256, cdnUrl, qps);
+            return new S3Host(s3AsyncClient, preSigner, presignRequest, headObjectRequest, bucket, uploadPath, disableCalculateSHA256, cdnUrl, limit);
         }
     }
 
     private boolean checkRateLimit(UUID user) {
         if (!this.enableRateLimit) return false;
-        RateLimiter rateLimiter = this.userRateLimiters.get(user, k -> RateLimiter.create(this.qps));
+        Bucket rateLimiter = this.userRateLimiters.get(user, k -> Bucket.builder().addLimit(this.limit).build());
         if (rateLimiter == null) { // 怎么可能null?
-            rateLimiter = RateLimiter.create(this.qps);
+            rateLimiter = Bucket.builder().addLimit(this.limit).build();
             this.userRateLimiters.put(user, rateLimiter);
         }
-        return !rateLimiter.tryAcquire();
+        return !rateLimiter.tryConsume(1);
     }
 }
