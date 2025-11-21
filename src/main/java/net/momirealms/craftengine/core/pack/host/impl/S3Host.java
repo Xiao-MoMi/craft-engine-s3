@@ -262,7 +262,6 @@ public class S3Host implements ResourcePackHost {
                 limit = Bandwidth.builder()
                         .capacity(maxRequests)
                         .refillGreedy(maxRequests, Duration.ofSeconds(resetInterval))
-                        .initialTokens(maxRequests / 2) // 修正首次可以直接突破限制请求 maxRequests * 2 次
                         .build();
             }
 
