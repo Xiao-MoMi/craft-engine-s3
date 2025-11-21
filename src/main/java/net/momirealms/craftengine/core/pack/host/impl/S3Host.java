@@ -254,7 +254,7 @@ public class S3Host implements ResourcePackHost {
                     .key(uploadPath)
                     .build();
 
-            Map<String, Object> rateMap = MiscUtils.castToMap(arguments.getOrDefault("rate-map", arguments.get("rate-limit")), true);
+            Map<String, Object> rateMap = MiscUtils.castToMap(ResourceConfigUtils.get(arguments, "rate-map", "rate-limit"), true);
             Bandwidth limit = null;
             if (rateMap != null) {
                 int maxRequests = Math.max(ResourceConfigUtils.getAsInt(rateMap.getOrDefault("max-requests", 5), "max-requests"), 1);
