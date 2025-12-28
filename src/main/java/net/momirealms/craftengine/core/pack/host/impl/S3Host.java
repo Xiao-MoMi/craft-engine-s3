@@ -5,15 +5,11 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Scheduler;
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
-import net.momirealms.craftengine.core.pack.host.ResourcePackDownloadData;
-import net.momirealms.craftengine.core.pack.host.ResourcePackHost;
-import net.momirealms.craftengine.core.pack.host.ResourcePackHostFactory;
-import net.momirealms.craftengine.core.pack.host.ResourcePackHosts;
+import net.momirealms.craftengine.core.pack.host.*;
 import net.momirealms.craftengine.core.plugin.CraftEngine;
 import net.momirealms.craftengine.core.plugin.locale.LocalizedException;
 import net.momirealms.craftengine.core.plugin.logger.Debugger;
 import net.momirealms.craftengine.core.util.HashUtils;
-import net.momirealms.craftengine.core.util.Key;
 import net.momirealms.craftengine.core.util.MiscUtils;
 import net.momirealms.craftengine.core.util.ResourceConfigUtils;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -49,7 +45,7 @@ import java.util.concurrent.TimeUnit;
 
 @SuppressWarnings("unused")
 public class S3Host implements ResourcePackHost {
-    public static final Factory FACTORY = new Factory();
+    public static final ResourcePackHostFactory<S3Host> FACTORY = new Factory();
     private final S3AsyncClient s3AsyncClient;
     private final S3Presigner preSigner;
     private final GetObjectPresignRequest presignRequest;
@@ -94,7 +90,7 @@ public class S3Host implements ResourcePackHost {
     }
 
     @Override
-    public Key type() {
+    public ResourcePackHostType<S3Host> type() {
         return ResourcePackHosts.S3;
     }
 
@@ -184,10 +180,10 @@ public class S3Host implements ResourcePackHost {
         }
     }
 
-    public static class Factory implements ResourcePackHostFactory {
+    private static class Factory implements ResourcePackHostFactory<S3Host> {
 
         @Override
-        public ResourcePackHost create(Map<String, Object> arguments) {
+        public S3Host create(Map<String, Object> arguments) {
             boolean useEnv = ResourceConfigUtils.getAsBoolean(arguments.getOrDefault("use-environment-variables", false), "use-environment-variables");
             String endpoint = ResourceConfigUtils.requireNonEmptyStringOrThrow(arguments.get("endpoint"), "warning.config.host.s3.missing_endpoint");
             String protocol = ResourceConfigUtils.requireNonEmptyStringOrThrow(arguments.getOrDefault("protocol", "https"), "warning.config.host.s3.missing_protocol");
