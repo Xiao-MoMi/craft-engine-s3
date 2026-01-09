@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "net.momirealms"
-version = "0.10"
+version = "0.11"
 
 repositories {
     mavenCentral()
@@ -16,8 +16,8 @@ repositories {
 dependencies {
     compileOnly("com.google.code.gson:gson:2.12.1")
     compileOnly("org.jetbrains:annotations:26.0.2")
-    compileOnly("net.momirealms:craft-engine-core:0.0.66.11-SNAPSHOT")
-    compileOnly("net.momirealms:craft-engine-bukkit:0.0.66.11-SNAPSHOT")
+    compileOnly("net.momirealms:craft-engine-core:0.0.66.19-SNAPSHOT")
+    compileOnly("net.momirealms:craft-engine-bukkit:0.0.66.19-SNAPSHOT")
     compileOnly("it.unimi.dsi:fastutil:8.5.15")
     // Amazon S3
     compileOnly("software.amazon.awssdk:s3:2.31.23")
