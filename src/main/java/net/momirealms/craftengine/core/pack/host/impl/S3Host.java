@@ -192,15 +192,15 @@ final class S3Host implements ResourcePackHost {
 
     private static class Factory implements ResourcePackHostFactory<S3Host> {
         private static final Region DEFAULT_REGION = Region.of("auto");
-        private static final String[] USE_ENVIRONMENT_VARIABLES = new String[]{"use-environment-variables", "use_environment_variables"};
-        private static final String[] PATH_STYLE = new String[]{"path-style", "path_style"};
-        private static final String[] ACCESS_KEY_ID = new String[]{"access-key-id", "access_key_id"};
-        private static final String[] ACCESS_KEY_SECRET = new String[]{"access-key-secret", "access_key_secret"};
-        private static final String[] UPLOAD_PATH = new String[]{"upload-path", "upload_path"};
-        private static final String[] DISABLE_CALCULATE_SHA256 = new String[]{"disable-calculate-sha256", "disable_calculate_sha256"};
-        private static final String[] RATE_LIMIT = new String[]{"rate-map", "rate-limit", "rate_map", "rate_limit"};
-        private static final String[] MAX_REQUESTS = new String[]{"max-requests", "max_requests"};
-        private static final String[] RESET_INTERVAL = new String[]{"reset-interval", "reset_interval"};
+        private static final String[] USE_ENVIRONMENT_VARIABLES = new String[]{"use_environment_variables", "use-environment-variables"};
+        private static final String[] PATH_STYLE = new String[]{"path_style", "path-style"};
+        private static final String[] ACCESS_KEY_ID = new String[]{"access_key_id", "access-key-id"};
+        private static final String[] ACCESS_KEY_SECRET = new String[]{"access_key_secret", "access-key-secret"};
+        private static final String[] UPLOAD_PATH = new String[]{"upload_path", "upload-path"};
+        private static final String[] DISABLE_CALCULATE_SHA256 = new String[]{"disable_calculate_sha256", "disable-calculate-sha256"};
+        private static final String[] RATE_LIMIT = new String[]{"rate_map", "rate_limit", "rate-map", "rate-limit"};
+        private static final String[] MAX_REQUESTS = new String[]{"max_requests", "max-requests"};
+        private static final String[] RESET_INTERVAL = new String[]{"reset_interval", "reset-interval"};
 
         @Override
         public S3Host create(ConfigSection section) {
@@ -211,14 +211,8 @@ final class S3Host implements ResourcePackHost {
             boolean usePathStyle = section.getBoolean(PATH_STYLE);
             String bucket = section.getNonEmptyString("bucket");
             Region region = section.getValue("region", it -> Region.of(it.getAsString()), DEFAULT_REGION);
-            String accessKeyId = useEnv ? System.getenv("CE_S3_ACCESS_KEY_ID") : section.getNonEmptyString(ACCESS_KEY_ID);
-            if (useEnv && (accessKeyId == null || accessKeyId.isEmpty())) {
-                throw new KnownResourceException("host.missing_environment_variable", section.path(), "CE_S3_ACCESS_KEY_ID");
-            }
-            String accessKeySecret = useEnv ? System.getenv("CE_S3_ACCESS_KEY_SECRET") : section.getNonEmptyString(ACCESS_KEY_SECRET);
-            if (useEnv && (accessKeySecret == null || accessKeySecret.isEmpty())) {
-                throw new KnownResourceException("host.missing_environment_variable", section.path(), "CE_S3_ACCESS_KEY_SECRET");
-            }
+            String accessKeyId = useEnv ? getNonNullEnvironmentVariable(section, "CE_S3_ACCESS_KEY_ID") : section.getNonEmptyString(ACCESS_KEY_ID);
+            String accessKeySecret = useEnv ? getNonNullEnvironmentVariable(section, "CE_S3_ACCESS_KEY_SECRET") : section.getNonEmptyString(ACCESS_KEY_SECRET);
             String uploadPath = section.getString(UPLOAD_PATH, "craftengine/resource_pack.zip");
             boolean disableCalculateSHA256 = section.getBoolean(DISABLE_CALCULATE_SHA256);
             Duration validity = Duration.ofSeconds(section.getInt("validity", 10));
@@ -258,7 +252,6 @@ final class S3Host implements ResourcePackHost {
             }
 
             S3AsyncClient s3AsyncClient = s3AsyncClientBuilder.build();
-
 
             S3Presigner preSigner = S3Presigner.builder()
                     .endpointOverride(endpointUri)

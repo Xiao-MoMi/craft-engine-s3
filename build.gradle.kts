@@ -16,8 +16,8 @@ repositories {
 dependencies {
     compileOnly("com.google.code.gson:gson:2.13.2")
     compileOnly("org.jetbrains:annotations:26.0.2")
-    compileOnly("net.momirealms:craft-engine-core:0.0.67.6.8-20260305.045450-2")
-    compileOnly("net.momirealms:craft-engine-bukkit:0.0.67.6.8-20260305.045450-2")
+    compileOnly("net.momirealms:craft-engine-core:0.0.67.6.8-20260305.073652-3")
+    compileOnly("net.momirealms:craft-engine-bukkit:0.0.67.6.8-20260305.073652-3")
     compileOnly("it.unimi.dsi:fastutil:8.5.18")
     // Amazon S3
     compileOnly("software.amazon.awssdk:s3:2.38.7")
