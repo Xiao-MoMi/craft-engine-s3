@@ -7,11 +7,11 @@ import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
 import net.momirealms.craftengine.core.pack.host.*;
 import net.momirealms.craftengine.core.plugin.CraftEngine;
-import net.momirealms.craftengine.core.plugin.locale.LocalizedException;
+import net.momirealms.craftengine.core.plugin.config.ConfigSection;
+import net.momirealms.craftengine.core.plugin.config.ConfigValue;
+import net.momirealms.craftengine.core.plugin.config.KnownResourceException;
 import net.momirealms.craftengine.core.plugin.logger.Debugger;
 import net.momirealms.craftengine.core.util.HashUtils;
-import net.momirealms.craftengine.core.util.MiscUtils;
-import net.momirealms.craftengine.core.util.ResourceConfigUtils;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
@@ -44,7 +44,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 
 @SuppressWarnings("unused")
-public class S3Host implements ResourcePackHost {
+public final class S3Host implements ResourcePackHost {
     public static final ResourcePackHostFactory<S3Host> FACTORY = new Factory();
     private final S3AsyncClient s3AsyncClient;
     private final S3Presigner preSigner;
@@ -61,7 +61,7 @@ public class S3Host implements ResourcePackHost {
             .expireAfterAccess(10, TimeUnit.MINUTES)
             .build();
 
-    public S3Host(
+    private S3Host(
             S3AsyncClient s3AsyncClient,
             S3Presigner preSigner,
             GetObjectPresignRequest presignRequest,
@@ -82,6 +82,20 @@ public class S3Host implements ResourcePackHost {
         this.cdnUrl = cdnUrl;
         this.limit = limit;
         this.enableRateLimit = limit != null;
+    }
+
+    private static String calculateSHA256(Path filePath) {
+        try (InputStream is = Files.newInputStream(filePath)) {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] buffer = new byte[8192];
+            int len;
+            while ((len = is.read(buffer)) != -1) {
+                md.update(buffer, 0, len);
+            }
+            return Base64.getEncoder().encodeToString(md.digest());
+        } catch (IOException | NoSuchAlgorithmException e) {
+            throw new RuntimeException("Failed to calculate SHA1", e);
+        }
     }
 
     @Override
@@ -166,44 +180,55 @@ public class S3Host implements ResourcePackHost {
         return this.cdnUrl + portString + sdkHttpRequest.encodedPath() + encodedQueryString;
     }
 
-    private static String calculateSHA256(Path filePath) {
-        try (InputStream is = Files.newInputStream(filePath)) {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] buffer = new byte[8192];
-            int len;
-            while ((len = is.read(buffer)) != -1) {
-                md.update(buffer, 0, len);
-            }
-            return Base64.getEncoder().encodeToString(md.digest());
-        } catch (IOException | NoSuchAlgorithmException e) {
-            throw new RuntimeException("Failed to calculate SHA1", e);
+    private boolean checkRateLimit(UUID user) {
+        if (!this.enableRateLimit) return false;
+        Bucket rateLimiter = this.userRateLimiters.get(user, k -> Bucket.builder().addLimit(this.limit).build());
+        if (rateLimiter == null) { // 怎么可能null?
+            rateLimiter = Bucket.builder().addLimit(this.limit).build();
+            this.userRateLimiters.put(user, rateLimiter);
         }
+        return !rateLimiter.tryConsume(1);
     }
 
     private static class Factory implements ResourcePackHostFactory<S3Host> {
+        private static final Region DEFAULT_REGION = Region.of("auto");
+        private static final String[] USE_ENVIRONMENT_VARIABLES = new String[]{"use-environment-variables", "use_environment_variables"};
+        private static final String[] PATH_STYLE = new String[]{"path-style", "path_style"};
+        private static final String[] ACCESS_KEY_ID = new String[]{"access-key-id", "access_key_id"};
+        private static final String[] ACCESS_KEY_SECRET = new String[]{"access-key-secret", "access_key_secret"};
+        private static final String[] UPLOAD_PATH = new String[]{"upload-path", "upload_path"};
+        private static final String[] DISABLE_CALCULATE_SHA256 = new String[]{"disable-calculate-sha256", "disable_calculate_sha256"};
+        private static final String[] RATE_LIMIT = new String[]{"rate-map", "rate-limit", "rate_map", "rate_limit"};
+        private static final String[] MAX_REQUESTS = new String[]{"max-requests", "max_requests"};
+        private static final String[] RESET_INTERVAL = new String[]{"reset-interval", "reset_interval"};
 
         @Override
-        public S3Host create(Map<String, Object> arguments) {
-            boolean useEnv = ResourceConfigUtils.getAsBoolean(arguments.getOrDefault("use-environment-variables", false), "use-environment-variables");
-            String endpoint = ResourceConfigUtils.requireNonEmptyStringOrThrow(arguments.get("endpoint"), "warning.config.host.s3.missing_endpoint");
-            String protocol = ResourceConfigUtils.requireNonEmptyStringOrThrow(arguments.getOrDefault("protocol", "https"), "warning.config.host.s3.missing_protocol");
+        public S3Host create(ConfigSection section) {
+            boolean useEnv = section.getBoolean(USE_ENVIRONMENT_VARIABLES);
+            String endpoint = section.getNonEmptyString("endpoint");
+            String protocol = section.getString("https", "protocol");
             URI endpointUri = URI.create(protocol + "://" + endpoint);
-            boolean usePathStyle = ResourceConfigUtils.getAsBoolean(arguments.getOrDefault("path-style", false), "path-style");
-            String bucket = ResourceConfigUtils.requireNonEmptyStringOrThrow(arguments.get("bucket"), "warning.config.host.s3.missing_bucket");
-            Region region = Region.of(ResourceConfigUtils.requireNonEmptyStringOrThrow(arguments.getOrDefault("region", "auto"), "warning.config.host.s3.missing_region"));
-            String accessKeyId = ResourceConfigUtils.requireNonEmptyStringOrThrow(useEnv ? System.getenv("CE_S3_ACCESS_KEY_ID") : arguments.get("access-key-id"), "warning.config.host.s3.missing_access_key");
-            String accessKeySecret = ResourceConfigUtils.requireNonEmptyStringOrThrow(useEnv ? System.getenv("CE_S3_ACCESS_KEY_SECRET") : arguments.get("access-key-secret"), "warning.config.host.s3.missing_secret");
-            String uploadPath = ResourceConfigUtils.requireNonEmptyStringOrThrow(arguments.getOrDefault("upload-path", "craftengine/resource_pack.zip"), "warning.config.host.s3.missing_upload_path");
-            boolean disableCalculateSHA256 = ResourceConfigUtils.getAsBoolean(arguments.getOrDefault("disable-calculate-sha256", false), "disable-calculate-sha256");
-            Duration validity = Duration.ofSeconds(ResourceConfigUtils.getAsInt(arguments.getOrDefault("validity", 10), "validity"));
-
-            Map<String, Object> cdn = MiscUtils.castToMap(arguments.get("cdn"), true);
-            String cdnUrl = null;
-            if (cdn != null) {
-                String cdnDomain = ResourceConfigUtils.requireNonEmptyStringOrThrow(cdn.get("domain"), "warning.config.host.s3.missing_cdn_domain");
-                String cdnProtocol = ResourceConfigUtils.requireNonEmptyStringOrThrow(cdn.getOrDefault("protocol", "https"), "warning.config.host.s3.missing_cdn_protocol");
-                cdnUrl = cdnProtocol + "://" + cdnDomain;
+            boolean usePathStyle = section.getBoolean(PATH_STYLE);
+            String bucket = section.getNonEmptyString("bucket");
+            Region region = section.getValue("region", it -> Region.of(it.getAsString()), DEFAULT_REGION);
+            String accessKeyId = useEnv ? System.getenv("CE_S3_ACCESS_KEY_ID") : section.getNonEmptyString(ACCESS_KEY_ID);
+            if (useEnv && (accessKeyId == null || accessKeyId.isEmpty())) {
+                throw new KnownResourceException("host.missing_environment_variable", section.path(), "CE_S3_ACCESS_KEY_ID");
             }
+            String accessKeySecret = useEnv ? System.getenv("CE_S3_ACCESS_KEY_SECRET") : section.getNonEmptyString(ACCESS_KEY_SECRET);
+            if (useEnv && (accessKeySecret == null || accessKeySecret.isEmpty())) {
+                throw new KnownResourceException("host.missing_environment_variable", section.path(), "CE_S3_ACCESS_KEY_SECRET");
+            }
+            String uploadPath = section.getString(UPLOAD_PATH, "craftengine/resource_pack.zip");
+            boolean disableCalculateSHA256 = section.getBoolean(DISABLE_CALCULATE_SHA256);
+            Duration validity = Duration.ofSeconds(section.getInt("validity", 10));
+
+            String cdnUrl = section.getValue("cdn", it -> {
+                ConfigSection configSection = it.getAsSection();
+                String cdnDomain = configSection.getNonEmptyString("domain");
+                String cdnProtocol = configSection.getValue("protocol", ConfigValue::getAsNonEmptyString, "https");
+                return cdnProtocol + "://" + cdnDomain;
+            });
 
             AwsBasicCredentials credentials = AwsBasicCredentials.create(accessKeyId, accessKeySecret);
 
@@ -213,16 +238,18 @@ public class S3Host implements ResourcePackHost {
                     .credentialsProvider(StaticCredentialsProvider.create(credentials))
                     .serviceConfiguration(b -> b.pathStyleAccessEnabled(usePathStyle));
 
-            Map<String, Object> proxySetting = MiscUtils.castToMap(arguments.get("proxy"), true);
+            ConfigSection proxySetting = section.getSection("proxy");
             if (proxySetting != null) {
-                String host = ResourceConfigUtils.requireNonEmptyStringOrThrow(proxySetting.get("host"), "warning.config.host.proxy.missing_host");
-                int port = ResourceConfigUtils.getAsInt(proxySetting.get("port"), "port");
-                if (port <= 0 || port > 65535) {
-                    throw new LocalizedException("warning.config.host.proxy.missing_port");
+                String host = proxySetting.getNonEmptyString("host");
+                int port = proxySetting.getNonNullInt("port");
+                if (port <= 0) {
+                    throw new KnownResourceException("number.greater_than", section.assemblePath("port"), "port", "0");
+                } else if (port > 65535) {
+                    throw new KnownResourceException("number.less_than", section.assemblePath("port"), "port", "65536");
                 }
-                String scheme = ResourceConfigUtils.requireNonEmptyStringOrThrow(proxySetting.get("scheme"), "warning.config.host.proxy.missing_scheme");
-                String username = Optional.ofNullable(proxySetting.get("username")).map(String::valueOf).orElse(null);
-                String password = Optional.ofNullable(proxySetting.get("password")).map(String::valueOf).orElse(null);
+                String scheme = proxySetting.getNonEmptyString("scheme");
+                String username = proxySetting.getString("username");
+                String password = proxySetting.getString("password");
                 ProxyConfiguration.Builder builder = ProxyConfiguration.builder().host(host).port(port).scheme(scheme);
                 if (username != null) builder = builder.username(username);
                 if (password != null) builder = builder.password(password);
@@ -249,29 +276,17 @@ public class S3Host implements ResourcePackHost {
                     .key(uploadPath)
                     .build();
 
-            Object rawLimit = ResourceConfigUtils.get(arguments, "rate-map", "rate-limit");
-            Map<String, Object> rateMap = MiscUtils.castToMap(rawLimit, true);
-            Bandwidth limit = null;
-            if (rateMap != null) {
-                int maxRequests = Math.max(ResourceConfigUtils.getAsInt(rateMap.getOrDefault("max-requests", 5), "max-requests"), 1);
-                int resetInterval = Math.max(ResourceConfigUtils.getAsInt(rateMap.getOrDefault("reset-interval", 20), "reset-interval"), 1);
-                limit = Bandwidth.builder()
+            Bandwidth limit = section.getValue(RATE_LIMIT, it -> {
+                ConfigSection configSection = it.getAsSection();
+                int maxRequests = Math.max(configSection.getInt(MAX_REQUESTS, 5), 1);
+                int resetInterval = Math.max(configSection.getInt(RESET_INTERVAL, 20), 1);
+                return Bandwidth.builder()
                         .capacity(maxRequests)
                         .refillGreedy(maxRequests, Duration.ofSeconds(resetInterval))
                         .build();
-            }
+            });
 
             return new S3Host(s3AsyncClient, preSigner, presignRequest, headObjectRequest, bucket, uploadPath, disableCalculateSHA256, cdnUrl, limit);
         }
-    }
-
-    private boolean checkRateLimit(UUID user) {
-        if (!this.enableRateLimit) return false;
-        Bucket rateLimiter = this.userRateLimiters.get(user, k -> Bucket.builder().addLimit(this.limit).build());
-        if (rateLimiter == null) { // 怎么可能null?
-            rateLimiter = Bucket.builder().addLimit(this.limit).build();
-            this.userRateLimiters.put(user, rateLimiter);
-        }
-        return !rateLimiter.tryConsume(1);
     }
 }

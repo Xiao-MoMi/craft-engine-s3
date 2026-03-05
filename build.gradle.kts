@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "net.momirealms"
-version = "0.14"
+version = "0.15"
 
 repositories {
     mavenCentral()
@@ -14,16 +14,16 @@ repositories {
 }
 
 dependencies {
-    compileOnly("com.google.code.gson:gson:2.12.1")
+    compileOnly("com.google.code.gson:gson:2.13.2")
     compileOnly("org.jetbrains:annotations:26.0.2")
-    compileOnly("net.momirealms:craft-engine-core:0.0.66.20-SNAPSHOT")
-    compileOnly("net.momirealms:craft-engine-bukkit:0.0.66.20-SNAPSHOT")
-    compileOnly("it.unimi.dsi:fastutil:8.5.15")
+    compileOnly("net.momirealms:craft-engine-core:0.0.67.6.8-20260305.045450-2")
+    compileOnly("net.momirealms:craft-engine-bukkit:0.0.67.6.8-20260305.045450-2")
+    compileOnly("it.unimi.dsi:fastutil:8.5.18")
     // Amazon S3
-    compileOnly("software.amazon.awssdk:s3:2.31.23")
-    compileOnly("software.amazon.awssdk:netty-nio-client:2.31.23")
+    compileOnly("software.amazon.awssdk:s3:2.38.7")
+    compileOnly("software.amazon.awssdk:netty-nio-client:2.38.7")
     // Cache
-    compileOnly("com.github.ben-manes.caffeine:caffeine:3.2.0")
+    compileOnly("com.github.ben-manes.caffeine:caffeine:3.2.3")
     // bucket4j
     compileOnly("com.bucket4j:bucket4j_jdk17-core:8.15.0")
 }
