@@ -44,7 +44,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 
 @SuppressWarnings("unused")
-final class S3Host implements ResourcePackHost {
+public final class S3Host implements ResourcePackHost {
     public static final ResourcePackHostFactory<S3Host> FACTORY = new Factory();
     private final S3AsyncClient s3AsyncClient;
     private final S3Presigner preSigner;
