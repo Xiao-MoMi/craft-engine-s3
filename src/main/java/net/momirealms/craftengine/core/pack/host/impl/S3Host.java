@@ -206,7 +206,7 @@ public final class S3Host implements ResourcePackHost {
         public S3Host create(ConfigSection section) {
             boolean useEnv = section.getBoolean(USE_ENVIRONMENT_VARIABLES);
             String endpoint = section.getNonEmptyString("endpoint");
-            String protocol = section.getString("https", "protocol");
+            String protocol = section.getString("protocol", "https");
             URI endpointUri = URI.create(protocol + "://" + endpoint);
             boolean usePathStyle = section.getBoolean(PATH_STYLE);
             String bucket = section.getNonEmptyString("bucket");
