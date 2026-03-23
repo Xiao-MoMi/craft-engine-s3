@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "net.momirealms"
-version = "0.16"
+version = "0.17"
 
 repositories {
     mavenCentral()
