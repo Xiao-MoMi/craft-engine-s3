@@ -10,7 +10,6 @@ import net.momirealms.craftengine.core.plugin.CraftEngine;
 import net.momirealms.craftengine.core.plugin.config.ConfigSection;
 import net.momirealms.craftengine.core.plugin.config.ConfigValue;
 import net.momirealms.craftengine.core.plugin.config.KnownResourceException;
-import net.momirealms.craftengine.core.plugin.locale.TranslationManager;
 import net.momirealms.craftengine.core.plugin.logger.Debugger;
 import net.momirealms.craftengine.core.util.HashUtils;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -95,7 +94,7 @@ public final class S3Host implements ResourcePackHost {
             }
             return Base64.getEncoder().encodeToString(md.digest());
         } catch (IOException | NoSuchAlgorithmException e) {
-            throw new RuntimeException(TranslationManager.instance().plainTranslation("host.s3.a"), e);
+            throw new RuntimeException("Failed to calculate SHA1", e);
         }
     }
 
@@ -112,7 +111,7 @@ public final class S3Host implements ResourcePackHost {
     @Override
     public CompletableFuture<List<ResourcePackDownloadData>> requestResourcePackDownloadLink(UUID player) {
         if (this.checkRateLimit(player)) {
-            Debugger.RESOURCE_PACK.debug(() -> TranslationManager.instance().plainTranslation("host.s3.b", player.toString()));
+            Debugger.RESOURCE_PACK.debug(() -> "[S3] Rate limit exceeded for player " + player + ". Skipping request.");
             return CompletableFuture.completedFuture(Collections.emptyList());
         }
         return this.s3AsyncClient
@@ -121,16 +120,16 @@ public final class S3Host implements ResourcePackHost {
                     if (exception != null) {
                         Throwable cause = exception.getCause();
                         if (cause instanceof NoSuchKeyException e) {
-                            CraftEngine.instance().logger().warn(TranslationManager.instance().plainTranslation("host.s3.c", this.bucket, this.uploadPath), e);
+                            CraftEngine.instance().logger().warn("[S3] Resource pack not found in bucket '" + this.bucket + "'. Path: " + this.uploadPath, e);
                         } else {
-                            CraftEngine.instance().logger().warn(TranslationManager.instance().plainTranslation("host.s3.d"), exception);
+                            CraftEngine.instance().logger().warn("[S3] Failed to retrieve resource pack metadata.", exception);
                         }
                         return Collections.emptyList();
                     }
                     String sha1 = headResponse.metadata().get("sha1");
                     if (sha1 == null) {
-                        CraftEngine.instance().logger().warn(TranslationManager.instance().plainTranslation("host.s3.e", this.uploadPath));
-                        throw new CompletionException(new IllegalStateException(TranslationManager.instance().plainTranslation("host.s3.f", this.uploadPath)));
+                        CraftEngine.instance().logger().warn("[S3] Missing SHA-1 checksum in object metadata. Path: " + this.uploadPath);
+                        throw new CompletionException(new IllegalStateException("Missing SHA-1 metadata for S3 object: " + this.uploadPath));
                     }
 
                     return Collections.singletonList(
@@ -153,7 +152,7 @@ public final class S3Host implements ResourcePackHost {
             build = build.checksumSHA256(calculateSHA256(resourcePackPath));
         }
         long uploadStart = System.currentTimeMillis();
-        CraftEngine.instance().logger().info(TranslationManager.instance().plainTranslation("host.s3.g", this.uploadPath));
+        CraftEngine.instance().logger().info("[S3] Initiating resource pack upload to '" + this.uploadPath + "'");
         return this.s3AsyncClient
                 .putObject(build.build(), AsyncRequestBody.fromFile(resourcePackPath))
                 .handle((response, exception) -> {
@@ -161,9 +160,12 @@ public final class S3Host implements ResourcePackHost {
                         Throwable cause = exception instanceof CompletionException ?
                                 exception.getCause() :
                                 exception;
-                        CraftEngine.instance().logger().warn(TranslationManager.instance().plainTranslation("host.s3.h", this.uploadPath, cause.getClass().getSimpleName(), cause.getMessage()), exception);
+                        CraftEngine.instance().logger().warn("[S3] Upload failed for path '" + this.uploadPath + "'. Error: " + cause.getClass().getSimpleName() + " - " + cause.getMessage(), exception);
                     } else {
-                        CraftEngine.instance().logger().info(TranslationManager.instance().plainTranslation("host.s3.i", this.uploadPath, String.valueOf(System.currentTimeMillis() - uploadStart)));
+                        CraftEngine.instance().logger().info(
+                                "[S3] Successfully uploaded resource pack to '" + this.uploadPath + "' in " +
+                                        (System.currentTimeMillis() - uploadStart) + " ms"
+                        );
                     }
                     return null;
                 });
