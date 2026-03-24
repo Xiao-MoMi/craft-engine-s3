@@ -7,10 +7,9 @@ import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
 import net.momirealms.craftengine.core.pack.host.*;
 import net.momirealms.craftengine.core.plugin.CraftEngine;
+import net.momirealms.craftengine.core.plugin.config.Config;
 import net.momirealms.craftengine.core.plugin.config.ConfigSection;
 import net.momirealms.craftengine.core.plugin.config.ConfigValue;
-import net.momirealms.craftengine.core.plugin.config.KnownResourceException;
-import net.momirealms.craftengine.core.plugin.logger.Debugger;
 import net.momirealms.craftengine.core.util.HashUtils;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
@@ -23,24 +22,19 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.S3AsyncClientBuilder;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
-import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
-import software.amazon.awssdk.utils.http.SdkHttpUtils;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
-import java.util.*;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 
 @SuppressWarnings("unused")
@@ -52,26 +46,16 @@ public final class S3Host implements ResourcePackHost {
     private final HeadObjectRequest headObjectRequest;
     private final String bucket;
     private final String uploadPath;
-    private final boolean disableCalculateSHA256;
     private final String cdnUrl;
-    private final boolean enableRateLimit;
+    private final boolean disableCalculateSHA256;
     private final Bandwidth limit;
-    private final Cache<UUID, Bucket> userRateLimiters = Caffeine.newBuilder()
-            .scheduler(Scheduler.systemScheduler())
-            .expireAfterAccess(10, TimeUnit.MINUTES)
-            .build();
+    private final Cache<UUID, Bucket> userRateLimiters;
 
-    private S3Host(
-            S3AsyncClient s3AsyncClient,
-            S3Presigner preSigner,
-            GetObjectPresignRequest presignRequest,
-            HeadObjectRequest headObjectRequest,
-            String bucket,
-            String uploadPath,
-            boolean disableCalculateSHA256,
-            String cdnUrl,
-            Bandwidth limit
-    ) {
+    private String cachedSha1;
+
+    private S3Host(S3AsyncClient s3AsyncClient, S3Presigner preSigner, GetObjectPresignRequest presignRequest,
+                   HeadObjectRequest headObjectRequest, String bucket, String uploadPath,
+                   boolean disableCalculateSHA256, String cdnUrl, Bandwidth limit) {
         this.s3AsyncClient = s3AsyncClient;
         this.preSigner = preSigner;
         this.presignRequest = presignRequest;
@@ -81,21 +65,10 @@ public final class S3Host implements ResourcePackHost {
         this.disableCalculateSHA256 = disableCalculateSHA256;
         this.cdnUrl = cdnUrl;
         this.limit = limit;
-        this.enableRateLimit = limit != null;
-    }
-
-    private static String calculateSHA256(Path filePath) {
-        try (InputStream is = Files.newInputStream(filePath)) {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] buffer = new byte[8192];
-            int len;
-            while ((len = is.read(buffer)) != -1) {
-                md.update(buffer, 0, len);
-            }
-            return Base64.getEncoder().encodeToString(md.digest());
-        } catch (IOException | NoSuchAlgorithmException e) {
-            throw new RuntimeException("Failed to calculate SHA1", e);
-        }
+        this.userRateLimiters = limit == null ? null : Caffeine.newBuilder()
+                .scheduler(Scheduler.systemScheduler())
+                .expireAfterAccess(10, TimeUnit.MINUTES)
+                .build();
     }
 
     @Override
@@ -110,84 +83,85 @@ public final class S3Host implements ResourcePackHost {
 
     @Override
     public CompletableFuture<List<ResourcePackDownloadData>> requestResourcePackDownloadLink(UUID player) {
-        if (this.checkRateLimit(player)) {
-            Debugger.RESOURCE_PACK.debug(() -> "[S3] Rate limit exceeded for player " + player + ". Skipping request.");
+        if (checkRateLimit(player)) {
             return CompletableFuture.completedFuture(Collections.emptyList());
         }
-        return this.s3AsyncClient
-                .headObject(this.headObjectRequest)
-                .handle((headResponse, exception) -> {
-                    if (exception != null) {
-                        Throwable cause = exception.getCause();
-                        if (cause instanceof NoSuchKeyException e) {
-                            CraftEngine.instance().logger().warn("[S3] Resource pack not found in bucket '" + this.bucket + "'. Path: " + this.uploadPath, e);
-                        } else {
-                            CraftEngine.instance().logger().warn("[S3] Failed to retrieve resource pack metadata.", exception);
-                        }
-                        return Collections.emptyList();
-                    }
-                    String sha1 = headResponse.metadata().get("sha1");
-                    if (sha1 == null) {
-                        CraftEngine.instance().logger().warn("[S3] Missing SHA-1 checksum in object metadata. Path: " + this.uploadPath);
-                        throw new CompletionException(new IllegalStateException("Missing SHA-1 metadata for S3 object: " + this.uploadPath));
-                    }
 
-                    return Collections.singletonList(
-                            ResourcePackDownloadData.of(
-                                    replaceWithCdnUrl(this.preSigner.presignGetObject(this.presignRequest).httpRequest()),
-                                    UUID.nameUUIDFromBytes(sha1.getBytes(StandardCharsets.UTF_8)),
-                                    sha1
-                            )
-                    );
-                });
+        CompletableFuture<List<ResourcePackDownloadData>> future = new CompletableFuture<>();
+
+        this.s3AsyncClient.headObject(this.headObjectRequest).whenComplete((headResponse, ex) -> {
+            if (ex != null) {
+                future.completeExceptionally(ex);
+                return;
+            }
+
+            String sha1 = headResponse.metadata().get("sha1");
+            if (sha1 == null) {
+                fail(future, "Missing SHA-1 metadata in S3 object", null);
+                return;
+            }
+
+            this.cachedSha1 = sha1;
+            String downloadUrl = buildFinalUrl(this.preSigner.presignGetObject(this.presignRequest).httpRequest());
+            UUID packUuid = UUID.nameUUIDFromBytes(sha1.getBytes(StandardCharsets.UTF_8));
+
+            future.complete(List.of(new ResourcePackDownloadData(downloadUrl, packUuid, sha1)));
+        });
+
+        return future;
     }
 
     @Override
     public CompletableFuture<Void> upload(Path resourcePackPath) {
-        PutObjectRequest.Builder build = PutObjectRequest.builder()
-                .bucket(this.bucket)
-                .key(this.uploadPath)
-                .metadata(Map.of("sha1", HashUtils.calculateLocalFileSha1(resourcePackPath)));
-        if (!this.disableCalculateSHA256) {
-            build = build.checksumSHA256(calculateSHA256(resourcePackPath));
-        }
-        long uploadStart = System.currentTimeMillis();
-        CraftEngine.instance().logger().info("[S3] Initiating resource pack upload to '" + this.uploadPath + "'");
-        return this.s3AsyncClient
-                .putObject(build.build(), AsyncRequestBody.fromFile(resourcePackPath))
-                .handle((response, exception) -> {
-                    if (exception != null) {
-                        Throwable cause = exception instanceof CompletionException ?
-                                exception.getCause() :
-                                exception;
-                        CraftEngine.instance().logger().warn("[S3] Upload failed for path '" + this.uploadPath + "'. Error: " + cause.getClass().getSimpleName() + " - " + cause.getMessage(), exception);
-                    } else {
-                        CraftEngine.instance().logger().info(
-                                "[S3] Successfully uploaded resource pack to '" + this.uploadPath + "' in " +
-                                        (System.currentTimeMillis() - uploadStart) + " ms"
-                        );
-                    }
-                    return null;
-                });
+        CompletableFuture<Void> future = new CompletableFuture<>();
+
+        CraftEngine.instance().scheduler().executeAsync(() -> {
+            try {
+                String localSha1 = HashUtils.calculateLocalFileSha1(resourcePackPath);
+                PutObjectRequest.Builder requestBuilder = PutObjectRequest.builder()
+                        .bucket(this.bucket)
+                        .key(this.uploadPath)
+                        .metadata(Map.of("sha1", localSha1));
+
+                if (!this.disableCalculateSHA256) {
+                    requestBuilder.checksumSHA256(HashUtils.calculateLocalFileSha1(resourcePackPath));
+                }
+
+                this.s3AsyncClient.putObject(requestBuilder.build(), AsyncRequestBody.fromFile(resourcePackPath))
+                        .whenComplete((resp, ex) -> {
+                            if (ex != null) {
+                                fail(future, "Upload failed", ex.getMessage());
+                            } else {
+                                this.cachedSha1 = localSha1;
+                                future.complete(null);
+                            }
+                        });
+            } catch (Exception e) {
+                future.completeExceptionally(e);
+            }
+        });
+
+        return future;
     }
 
-    private String replaceWithCdnUrl(SdkHttpRequest sdkHttpRequest) {
-        String encodedQueryString = sdkHttpRequest.encodedQueryParameters().map(value -> "?" + value).orElse("");
-        String portString = SdkHttpUtils.isUsingStandardPort(sdkHttpRequest.protocol(), sdkHttpRequest.port()) ? "" : ":" + sdkHttpRequest.port();
+    private String buildFinalUrl(SdkHttpRequest request) {
+        String query = request.encodedQueryParameters().map(q -> "?" + q).orElse("");
         if (this.cdnUrl == null || this.cdnUrl.isEmpty()) {
-            return sdkHttpRequest.protocol() + "://" + sdkHttpRequest.host() + portString + sdkHttpRequest.encodedPath() + encodedQueryString;
+            return request.protocol() + "://" + request.host() + request.encodedPath() + query;
         }
-        return this.cdnUrl + portString + sdkHttpRequest.encodedPath() + encodedQueryString;
+
+        String baseCdn = this.cdnUrl.endsWith("/") ? this.cdnUrl.substring(0, this.cdnUrl.length() - 1) : this.cdnUrl;
+        return baseCdn + request.encodedPath() + query;
     }
 
-    private boolean checkRateLimit(UUID user) {
-        if (!this.enableRateLimit) return false;
-        Bucket rateLimiter = this.userRateLimiters.get(user, k -> Bucket.builder().addLimit(this.limit).build());
-        if (rateLimiter == null) { // 怎么可能null?
-            rateLimiter = Bucket.builder().addLimit(this.limit).build();
-            this.userRateLimiters.put(user, rateLimiter);
-        }
-        return !rateLimiter.tryConsume(1);
+    private boolean checkRateLimit(UUID player) {
+        if (this.userRateLimiters == null) return false;
+        Bucket bucket = this.userRateLimiters.get(player, k -> Bucket.builder().addLimit(this.limit).build());
+        return bucket != null && !bucket.tryConsume(1);
+    }
+
+    private void fail(CompletableFuture<?> future, String reason, String body) {
+        future.completeExceptionally(new RuntimeException("S3Host Error: " + reason + (body != null ? " | " + body : "")));
     }
 
     private static class Factory implements ResourcePackHostFactory<S3Host> {
@@ -232,21 +206,10 @@ public final class S3Host implements ResourcePackHost {
                     .credentialsProvider(StaticCredentialsProvider.create(credentials))
                     .serviceConfiguration(b -> b.pathStyleAccessEnabled(usePathStyle));
 
-            ConfigSection proxySetting = section.getSection("proxy");
-            if (proxySetting != null) {
-                String host = proxySetting.getNonEmptyString("host");
-                int port = proxySetting.getNonNullInt("port");
-                if (port <= 0) {
-                    throw new KnownResourceException("number.greater_than", section.assemblePath("port"), "port", "0");
-                } else if (port > 65535) {
-                    throw new KnownResourceException("number.less_than", section.assemblePath("port"), "port", "65536");
-                }
-                String scheme = proxySetting.getNonEmptyString("scheme");
-                String username = proxySetting.getString("username");
-                String password = proxySetting.getString("password");
-                ProxyConfiguration.Builder builder = ProxyConfiguration.builder().host(host).port(port).scheme(scheme);
-                if (username != null) builder = builder.username(username);
-                if (password != null) builder = builder.password(password);
+            if (Config.enableProxy()) {
+                ProxyConfiguration.Builder builder = ProxyConfiguration.builder().host(Config.proxyHost()).port(Config.proxyPort()).scheme(Config.proxyScheme());
+                if (!Config.proxyUsername().isEmpty()) builder = builder.username(Config.proxyUsername());
+                if (!Config.proxyPassword().isEmpty()) builder = builder.password(Config.proxyPassword());
                 SdkAsyncHttpClient httpClient = NettyNioAsyncHttpClient.builder().proxyConfiguration(builder.build()).build();
                 s3AsyncClientBuilder = s3AsyncClientBuilder.httpClient(httpClient);
             }
