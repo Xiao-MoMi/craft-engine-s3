@@ -1,7 +1,7 @@
 plugins {
     id("java")
     id("maven-publish")
-    id("com.gradleup.shadow") version "9.2.2"
+    id("com.gradleup.shadow") version "9.4.1"
 }
 
 group = "net.momirealms"
@@ -16,8 +16,7 @@ repositories {
 dependencies {
     compileOnly("com.google.code.gson:gson:2.13.2")
     compileOnly("org.jetbrains:annotations:26.0.2")
-    compileOnly("net.momirealms:craft-engine-core:26.4-20260411.164813-15")
-    compileOnly("net.momirealms:craft-engine-bukkit:26.4-20260411.164813-15")
+    compileOnly("net.momirealms:craft-engine-core:26.5-SNAPSHOT")
     compileOnly("it.unimi.dsi:fastutil:8.5.18")
     // Amazon S3
     compileOnly("software.amazon.awssdk:s3:2.38.7")
