@@ -52,8 +52,6 @@ public final class S3Host implements ResourcePackHost {
     private final Bandwidth limit;
     private final Cache<UUID, Bucket> userRateLimiters;
 
-    private String cachedSha1;
-
     private S3Host(S3AsyncClient s3AsyncClient, S3Presigner preSigner, GetObjectPresignRequest presignRequest,
                    HeadObjectRequest headObjectRequest, String bucket, String uploadPath,
                    boolean disableCalculateSHA256, String cdnUrl, Bandwidth limit) {
@@ -102,7 +100,6 @@ public final class S3Host implements ResourcePackHost {
                 return;
             }
 
-            this.cachedSha1 = sha1;
             String downloadUrl = buildFinalUrl(this.preSigner.presignGetObject(this.presignRequest).httpRequest());
             UUID packUuid = UUID.nameUUIDFromBytes(sha1.getBytes(StandardCharsets.UTF_8));
 
@@ -133,7 +130,6 @@ public final class S3Host implements ResourcePackHost {
                             if (ex != null) {
                                 fail(future, "Upload failed", ex.getMessage());
                             } else {
-                                this.cachedSha1 = localSha1;
                                 future.complete(null);
                             }
                         });
