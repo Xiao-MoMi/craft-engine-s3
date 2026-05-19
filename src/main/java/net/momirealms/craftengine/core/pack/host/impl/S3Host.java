@@ -22,6 +22,7 @@ import software.amazon.awssdk.http.nio.netty.ProxyConfiguration;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.S3AsyncClientBuilder;
+import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
@@ -197,11 +198,15 @@ public final class S3Host implements ResourcePackHost {
 
             AwsBasicCredentials credentials = AwsBasicCredentials.create(accessKeyId, accessKeySecret);
 
+            S3Configuration configuration = S3Configuration.builder()
+                    .pathStyleAccessEnabled(usePathStyle)
+                    .build();
+
             S3AsyncClientBuilder s3AsyncClientBuilder = S3AsyncClient.builder()
                     .endpointOverride(endpointUri)
                     .region(region)
                     .credentialsProvider(StaticCredentialsProvider.create(credentials))
-                    .serviceConfiguration(b -> b.pathStyleAccessEnabled(usePathStyle));
+                    .serviceConfiguration(configuration);
 
             if (Config.enableProxy()) {
                 ProxyConfiguration.Builder builder = ProxyConfiguration.builder().host(Config.proxyHost()).port(Config.proxyPort()).scheme(Config.proxyScheme());
@@ -212,11 +217,11 @@ public final class S3Host implements ResourcePackHost {
             }
 
             S3AsyncClient s3AsyncClient = s3AsyncClientBuilder.build();
-
             S3Presigner preSigner = S3Presigner.builder()
                     .endpointOverride(endpointUri)
                     .region(region)
                     .credentialsProvider(StaticCredentialsProvider.create(credentials))
+                    .serviceConfiguration(configuration)
                     .build();
 
             GetObjectPresignRequest presignRequest = GetObjectPresignRequest.builder()
