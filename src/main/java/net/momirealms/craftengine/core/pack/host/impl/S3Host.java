@@ -52,13 +52,12 @@ public final class S3Host implements ResourcePackHost {
     private final String bucket;
     private final String uploadPath;
     private final String cdnUrl;
-    private final boolean disableCalculateSHA256;
+    private final boolean enableCalculateSHA256;
     private final Bandwidth limit;
     private final Cache<UUID, Bucket> userRateLimiters;
     private final boolean multipartEnabled;
     private final long partSizeBytes;
     private final int maxConcurrency;
-
 
     private S3Host(S3AsyncClient s3AsyncClient, S3Presigner preSigner, GetObjectPresignRequest presignRequest,
                    HeadObjectRequest headObjectRequest, String bucket, String uploadPath,
@@ -70,7 +69,7 @@ public final class S3Host implements ResourcePackHost {
         this.headObjectRequest = headObjectRequest;
         this.bucket = bucket;
         this.uploadPath = uploadPath;
-        this.disableCalculateSHA256 = disableCalculateSHA256;
+        this.enableCalculateSHA256 = !disableCalculateSHA256; // 提前反转方便看
         this.cdnUrl = cdnUrl;
         this.limit = limit;
         this.userRateLimiters = limit == null ? null : Caffeine.newBuilder()
@@ -145,27 +144,23 @@ public final class S3Host implements ResourcePackHost {
     }
 
     private void uploadSimple(Path resourcePackPath, Map<String, String> metadata, CompletableFuture<Void> future) {
-        try {
-            PutObjectRequest.Builder requestBuilder = PutObjectRequest.builder()
-                    .bucket(this.bucket)
-                    .key(this.uploadPath)
-                    .metadata(metadata);
+        PutObjectRequest.Builder requestBuilder = PutObjectRequest.builder()
+                .bucket(this.bucket)
+                .key(this.uploadPath)
+                .metadata(metadata);
 
-            if (!this.disableCalculateSHA256) {
-                requestBuilder.checksumSHA256(calculateSHA256(resourcePackPath));
-            }
-
-            this.s3AsyncClient.putObject(requestBuilder.build(), AsyncRequestBody.fromFile(resourcePackPath))
-                    .whenComplete((resp, ex) -> {
-                        if (ex != null) {
-                            fail(future, "Upload failed", ex.getMessage());
-                        } else {
-                            future.complete(null);
-                        }
-                    });
-        } catch (Exception e) {
-            future.completeExceptionally(e);
+        if (this.enableCalculateSHA256) {
+            requestBuilder.checksumSHA256(calculateSHA256(resourcePackPath));
         }
+
+        this.s3AsyncClient.putObject(requestBuilder.build(), AsyncRequestBody.fromFile(resourcePackPath))
+                .whenComplete((resp, ex) -> {
+                    if (ex != null) {
+                        fail(future, "Upload failed", ex.getMessage());
+                    } else {
+                        future.complete(null);
+                    }
+                });
     }
 
     private void uploadMultipart(Path resourcePackPath, long fileSize, Map<String, String> metadata, CompletableFuture<Void> future) {
@@ -288,9 +283,7 @@ public final class S3Host implements ResourcePackHost {
         if (this.cdnUrl == null || this.cdnUrl.isEmpty()) {
             return request.protocol() + "://" + request.host() + request.encodedPath() + query;
         }
-
-        String baseCdn = this.cdnUrl.endsWith("/") ? this.cdnUrl.substring(0, this.cdnUrl.length() - 1) : this.cdnUrl;
-        return baseCdn + request.encodedPath() + query;
+        return this.cdnUrl + request.encodedPath() + query;
     }
 
     private boolean checkRateLimit(UUID player) {
@@ -331,10 +324,9 @@ public final class S3Host implements ResourcePackHost {
         private static final String[] MULTIPART_UPLOAD = new String[]{"multipart_upload", "multipart-upload"};
         private static final String[] PART_SIZE = new String[]{"part_size", "part-size"};
         private static final String[] MAX_CONCURRENCY = new String[]{"max_concurrency", "max-concurrency"};
-        private static final String[] CONNECT_TIMEOUT = new String[]{"connect_timeout", "connect-timeout"};
-        private static final String[] SOCKET_TIMEOUT = new String[]{"socket_timeout", "socket-timeout", "read_timeout", "read-timeout"};
-        private static final String[] API_CALL_TIMEOUT = new String[]{"api_call_timeout", "api-call-timeout"};
-        private static final String[] API_CALL_ATTEMPT_TIMEOUT = new String[]{"api_call_attempt_timeout", "api-call-attempt-timeout"};
+        private static final String[] API_CALL = new String[]{"api_call", "api-call"};
+        private static final String[] API_CALL_ATTEMPT = new String[]{"api_call_attempt", "api-call-attempt"};
+        private static final String[] CONNECTION_ACQUISITION = new String[]{"connection_acquisition", "connection-acquisition"};
 
         @Override
         public S3Host create(ConfigSection section) {
@@ -355,7 +347,8 @@ public final class S3Host implements ResourcePackHost {
                 ConfigSection configSection = it.getAsSection();
                 String cdnDomain = configSection.getNonEmptyString("domain");
                 String cdnProtocol = configSection.getValue("protocol", ConfigValue::getAsNonEmptyString, "https");
-                return cdnProtocol + "://" + cdnDomain;
+                String url = cdnProtocol + "://" + cdnDomain;
+                return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
             });
 
             AwsBasicCredentials credentials = AwsBasicCredentials.create(accessKeyId, accessKeySecret);
@@ -369,20 +362,22 @@ public final class S3Host implements ResourcePackHost {
 
             ConfigValue timeout = section.getValue("timeout");
             if (timeout != null) {
-                int connect, socket, apiCall, apiCallAttempt;
+                int connect, socket, apiCall, apiCallAttempt, connectionAcquisition;
                 if (timeout.is(Map.class)) {
                     ConfigSection configSection = timeout.getAsSection();
-                    connect = configSection.getValue(CONNECT_TIMEOUT, it -> it.getAsInt(1), -1);
-                    socket = configSection.getValue(SOCKET_TIMEOUT, it -> it.getAsInt(1), -1);
-                    apiCall = configSection.getValue(API_CALL_TIMEOUT, it -> it.getAsInt(1), -1);
-                    apiCallAttempt = configSection.getValue(API_CALL_ATTEMPT_TIMEOUT, it -> it.getAsInt(1), -1);
+                    connect = configSection.getValue("connect", it -> it.getAsInt(1), -1);
+                    socket = configSection.getValue("socket", it -> it.getAsInt(1), -1);
+                    apiCall = configSection.getValue(API_CALL, it -> it.getAsInt(1), -1);
+                    apiCallAttempt = configSection.getValue(API_CALL_ATTEMPT, it -> it.getAsInt(1), -1);
+                    connectionAcquisition = configSection.getValue(CONNECTION_ACQUISITION, it -> it.getAsInt(1), -1);
                 } else {
-                    connect = socket = apiCall = apiCallAttempt = timeout.getAsInt(1);
+                    connect = socket = apiCall = apiCallAttempt = connectionAcquisition = timeout.getAsInt(1);
                 }
                 if (connect > 0) httpClientBuilder = httpClientBuilder.connectionTimeout(Duration.ofSeconds(connect));
                 if (socket > 0) httpClientBuilder = httpClientBuilder.readTimeout(Duration.ofSeconds(socket)).writeTimeout(Duration.ofSeconds(socket));
                 if (apiCall > 0) overrideConfigurationBuilder.apiCallTimeout(Duration.ofSeconds(apiCall));
                 if (apiCallAttempt > 0) overrideConfigurationBuilder.apiCallAttemptTimeout(Duration.ofSeconds(apiCallAttempt));
+                if (connectionAcquisition > 0) httpClientBuilder.connectionAcquisitionTimeout(Duration.ofSeconds(connectionAcquisition));
             }
 
             S3AsyncClientBuilder s3AsyncClientBuilder = S3AsyncClient.builder()
