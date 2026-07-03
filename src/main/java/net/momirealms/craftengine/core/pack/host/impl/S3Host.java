@@ -184,7 +184,7 @@ public final class S3Host implements ResourcePackHost {
             String uploadId = createResponse.uploadId();
             int totalParts = (int) ((fileSize + this.partSizeBytes - 1) / this.partSizeBytes);
             List<CompletableFuture<CompletedPart>> partFutures = new ArrayList<>(totalParts);
-            Semaphore semaphore = new Semaphore(Math.max(1, this.maxConcurrency));
+            Semaphore semaphore = new Semaphore(this.maxConcurrency);
 
             try {
                 for (int partNumber = 1; partNumber <= totalParts; partNumber++) {
@@ -336,8 +336,6 @@ public final class S3Host implements ResourcePackHost {
         private static final String[] API_CALL_TIMEOUT = new String[]{"api_call_timeout", "api-call-timeout"};
         private static final String[] API_CALL_ATTEMPT_TIMEOUT = new String[]{"api_call_attempt_timeout", "api-call-attempt-timeout"};
 
-
-
         @Override
         public S3Host create(ConfigSection section) {
             boolean useEnv = section.getBoolean(USE_ENVIRONMENT_VARIABLES);
@@ -435,8 +433,9 @@ public final class S3Host implements ResourcePackHost {
             boolean multipartEnabled = multipartSection != null;
             long partSizeBytes = -1, thresholdBytes = -1; int maxConcurrency = -1;
             if (multipartEnabled) {
-                partSizeBytes = multipartSection.getLong(PART_SIZE);
-                maxConcurrency = multipartSection.getInt(MAX_CONCURRENCY);
+                partSizeBytes = multipartSection.getLong(PART_SIZE, -1);
+                maxConcurrency = multipartSection.getValue(MAX_CONCURRENCY, it -> it.getAsInt(1) -1);
+                if (partSizeBytes <= 0 || maxConcurrency <= 0) multipartEnabled = false;
             }
 
             return new S3Host(
