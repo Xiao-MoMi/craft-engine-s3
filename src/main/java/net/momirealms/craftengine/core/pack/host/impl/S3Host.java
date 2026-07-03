@@ -398,9 +398,9 @@ public final class S3Host implements ResourcePackHost {
                 }
                 if (connect > 0) httpClientBuilder = httpClientBuilder.connectionTimeout(Duration.ofSeconds(connect));
                 if (socket > 0) httpClientBuilder = httpClientBuilder.readTimeout(Duration.ofSeconds(socket)).writeTimeout(Duration.ofSeconds(socket));
-                if (apiCall > 0) overrideConfigurationBuilder.apiCallTimeout(Duration.ofSeconds(apiCall));
-                if (apiCallAttempt > 0) overrideConfigurationBuilder.apiCallAttemptTimeout(Duration.ofSeconds(apiCallAttempt));
-                if (connectionAcquisition > 0) httpClientBuilder.connectionAcquisitionTimeout(Duration.ofSeconds(connectionAcquisition));
+                if (apiCall > 0) overrideConfigurationBuilder = overrideConfigurationBuilder.apiCallTimeout(Duration.ofSeconds(apiCall));
+                if (apiCallAttempt > 0) overrideConfigurationBuilder = overrideConfigurationBuilder.apiCallAttemptTimeout(Duration.ofSeconds(apiCallAttempt));
+                if (connectionAcquisition > 0) httpClientBuilder = httpClientBuilder.connectionAcquisitionTimeout(Duration.ofSeconds(connectionAcquisition));
             }
 
             S3AsyncClientBuilder s3AsyncClientBuilder = S3AsyncClient.builder()
