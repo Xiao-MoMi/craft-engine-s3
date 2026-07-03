@@ -58,11 +58,12 @@ public final class S3Host implements ResourcePackHost {
     private final boolean multipartEnabled;
     private final long partSizeBytes;
     private final int maxConcurrency;
+    private final int maxPartRetries;
 
     private S3Host(S3AsyncClient s3AsyncClient, S3Presigner preSigner, GetObjectPresignRequest presignRequest,
                    HeadObjectRequest headObjectRequest, String bucket, String uploadPath,
                    boolean disableCalculateSHA256, String cdnUrl, Bandwidth limit,
-                   boolean multipartEnabled, long partSizeBytes, int maxConcurrency) {
+                   boolean multipartEnabled, long partSizeBytes, int maxConcurrency, int maxPartRetries) {
         this.s3AsyncClient = s3AsyncClient;
         this.preSigner = preSigner;
         this.presignRequest = presignRequest;
@@ -79,7 +80,7 @@ public final class S3Host implements ResourcePackHost {
         this.multipartEnabled = multipartEnabled;
         this.partSizeBytes = partSizeBytes;
         this.maxConcurrency = maxConcurrency;
-
+        this.maxPartRetries = maxPartRetries;
     }
 
     @Override
@@ -231,13 +232,19 @@ public final class S3Host implements ResourcePackHost {
     }
 
     private CompletableFuture<CompletedPart> uploadSinglePart(String uploadId, int partNumber, byte[] chunk, Semaphore semaphore) {
+        CompletableFuture<CompletedPart> resultFuture = new CompletableFuture<>();
+        attemptUploadPart(uploadId, partNumber, chunk, semaphore, 1, resultFuture);
+        return resultFuture;
+    }
+
+    private void attemptUploadPart(String uploadId, int partNumber, byte[] chunk, Semaphore semaphore,
+                                   int attempt, CompletableFuture<CompletedPart> resultFuture) {
         try {
             semaphore.acquire();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            CompletableFuture<CompletedPart> failed = new CompletableFuture<>();
-            failed.completeExceptionally(e);
-            return failed;
+            resultFuture.completeExceptionally(e);
+            return;
         }
 
         UploadPartRequest uploadPartRequest = UploadPartRequest.builder()
@@ -247,12 +254,27 @@ public final class S3Host implements ResourcePackHost {
                 .partNumber(partNumber)
                 .build();
 
-        return this.s3AsyncClient.uploadPart(uploadPartRequest, AsyncRequestBody.fromBytes(chunk))
-                .whenComplete((r, e) -> semaphore.release())
-                .thenApply(response -> CompletedPart.builder()
-                        .partNumber(partNumber)
-                        .eTag(response.eTag())
-                        .build());
+        this.s3AsyncClient.uploadPart(uploadPartRequest, AsyncRequestBody.fromBytes(chunk))
+                .whenComplete((response, ex) -> {
+                    semaphore.release();
+
+                    if (ex == null) {
+                        resultFuture.complete(CompletedPart.builder()
+                                .partNumber(partNumber)
+                                .eTag(response.eTag())
+                                .build());
+                        return;
+                    }
+
+                    if (attempt >= this.maxPartRetries) {
+                        resultFuture.completeExceptionally(ex);
+                        return;
+                    }
+
+                    long backoffMillis = Math.min(1000L << (attempt - 1), 8000L); // 最大8秒
+                    CompletableFuture.delayedExecutor(backoffMillis, TimeUnit.MILLISECONDS)
+                            .execute(() -> attemptUploadPart(uploadId, partNumber, chunk, semaphore, attempt + 1, resultFuture));
+                });
     }
 
     private void abortMultipartUpload(String uploadId) {
@@ -324,6 +346,7 @@ public final class S3Host implements ResourcePackHost {
         private static final String[] MULTIPART_UPLOAD = new String[]{"multipart_upload", "multipart-upload"};
         private static final String[] PART_SIZE = new String[]{"part_size", "part-size"};
         private static final String[] MAX_CONCURRENCY = new String[]{"max_concurrency", "max-concurrency"};
+        private static final String[] MAX_RETRIES = new String[]{"max_retries", "max-retries"};
         private static final String[] API_CALL = new String[]{"api_call", "api-call"};
         private static final String[] API_CALL_ATTEMPT = new String[]{"api_call_attempt", "api-call-attempt"};
         private static final String[] CONNECTION_ACQUISITION = new String[]{"connection_acquisition", "connection-acquisition"};
@@ -426,10 +449,11 @@ public final class S3Host implements ResourcePackHost {
 
             ConfigSection multipartSection = section.getSection(MULTIPART_UPLOAD);
             boolean multipartEnabled = multipartSection != null;
-            long partSizeBytes = -1, thresholdBytes = -1; int maxConcurrency = -1;
+            long partSizeBytes = -1; int maxConcurrency = -1, maxPartRetries = 3;
             if (multipartEnabled) {
                 partSizeBytes = multipartSection.getLong(PART_SIZE, -1);
                 maxConcurrency = multipartSection.getValue(MAX_CONCURRENCY, it -> it.getAsInt(1) -1);
+                maxPartRetries = multipartSection.getValue(MAX_RETRIES, it -> it.getAsInt(1), 3);
                 if (partSizeBytes <= 0 || maxConcurrency <= 0) multipartEnabled = false;
             }
 
@@ -437,7 +461,7 @@ public final class S3Host implements ResourcePackHost {
                     s3AsyncClient, preSigner, presignRequest,
                     headObjectRequest, bucket, uploadPath,
                     disableCalculateSHA256, cdnUrl, limit,
-                    multipartEnabled, partSizeBytes, maxConcurrency
+                    multipartEnabled, partSizeBytes, maxConcurrency, maxPartRetries
             );
         }
     }
