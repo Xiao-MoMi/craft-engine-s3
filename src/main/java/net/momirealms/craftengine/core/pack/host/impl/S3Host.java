@@ -129,7 +129,7 @@ public final class S3Host implements ResourcePackHost {
         CraftEngine.instance().scheduler().executeAsync(() -> {
             try {
                 long fileSize = Files.size(resourcePackPath);
-                String localSha1 = HashUtils.calculateLocalFileSha1(resourcePackPath);
+                String localSha1 = HashUtils.sha1(resourcePackPath);
                 Map<String, String> metadata = Map.of("sha1", localSha1);
                 if (this.multipartEnabled && fileSize > this.partSizeBytes) {
                     uploadMultipart(resourcePackPath, fileSize, metadata, future);
