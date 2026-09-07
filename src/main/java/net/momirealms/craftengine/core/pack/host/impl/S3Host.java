@@ -352,7 +352,7 @@ public final class S3Host implements ResourcePackHost {
         private static final String[] CONNECTION_ACQUISITION = new String[]{"connection_acquisition", "connection-acquisition"};
 
         @Override
-        public S3Host create(ConfigSection section) {
+        public S3Host create(String id, ConfigSection section) {
             boolean useEnv = section.getBoolean(USE_ENVIRONMENT_VARIABLES);
             String endpoint = section.getNonEmptyString("endpoint");
             String protocol = section.getString("protocol", "https");
