@@ -390,7 +390,7 @@ public final class S3Host implements ResourcePackHost {
                     ConfigSection configSection = timeout.getAsSection();
                     connect = configSection.getValue("connect", it -> it.getAsInt(1), -1);
                     socket = configSection.getValue("socket", it -> it.getAsInt(1), -1);
-                    apiCall = configSection.getValue(API_CALL, it -> it.getAsInt(1), -1);
+                    apiCall = configSection.getValue(API_CALL, it -> it.getAsInt(1), 300);
                     apiCallAttempt = configSection.getValue(API_CALL_ATTEMPT, it -> it.getAsInt(1), -1);
                     connectionAcquisition = configSection.getValue(CONNECTION_ACQUISITION, it -> it.getAsInt(1), -1);
                 } else {
